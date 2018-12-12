@@ -1,4 +1,4 @@
-
+//this is the best day every 
 
 #property copyright "Copy-Right 2018 kkinzler"
 #property description "This will be a simple demonstration of how to write an expert advisor"
