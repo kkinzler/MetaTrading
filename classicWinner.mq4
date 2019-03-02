@@ -9,8 +9,10 @@
 double risk = .02; //percent of balance to risk on each trade
 double stopLoss = 0.0; //determined when opening position
 double takeProfit = 0.0; //determined when opening position
+double newStopLoss = 0.0; //set newStopLoss off open price in order to cover failed trades + spread
+double newTakeProfit = 0.0;
 
-int openPosition = 0; //set to 1 when position opens
+int positionOpen = 0; //set to 1 when position opens
 int startHour = 7; //hour to start trading
 int endHour = 16; //hour to stop trading
 
@@ -18,26 +20,15 @@ string EAName = "simpleDemo"; //name used so you can tell which advisor made whi
 int Magic = 38493847; //magic number used to verify you are accessing your position
 double LotDigits = 2; //brokers demand you round your position size to a certain decimal point
                       //this is determined by by whether your broker trades in micro-lots
-int slippage = 2; //between getting the latest tick value and placing an order the price might 
+int slippage = 0; //between getting the latest tick value and placing an order the price might 
                   //have changed. this is the amount in pips(or points) that the price is
                   //allowed to change and you'll still want to make the trade
 
 int ATRPeriod_1 = 14; //parameters for Average True Range indicator. used to find exit points
 int ATRPeriod_2 = 5; 
 
-extern int FastMAPeriod = 9;
-extern int SlowMAPeriod = 30;
-extern double ATRCoef = 0.5;
-extern double trailCoef = 3.0;
-extern bool partialExit = true;
-
-int macdSignal = 0;
-int hour = 60;
-int day = 1440;
-
-
 int init(){
-    //usually this function that runs once when it's placed on a currency pair
+    //usually this function runs once when EA is placed on a currency pair and 
     //sets valuable information based on parameters specific to your broker.
     //since i am writing this for myself i will hard code when necessary
     //to my brokers specs.
@@ -45,56 +36,37 @@ return 0;
 }
 
 int start(){
+    
+    int toDo = tradeAllowed(); //check for open orders and whether it's ok to look for a new order
+    int signal;
 
-   int lookForTrade = manageOpenOrders(); //check for open orders and whether it's ok to look for a new order
+    if(toDo == 86){
+        close();
+    if(toDo == 1)
+        signal = generateTradeSignal();
+    if(toDo == 2)
+        checkExits();
+    if(toDo == 0)
+        //do nothing on 0
 
-   if(lookForTrade == 0) //if zero is returned not ok to open new order
-        return 0;
-
-
-
+    if(signal)
+        gamble(signal);
 
 return 0;
 }
 
-int manageOpenOrders(){
-    int trading = tradeAllowed();
-
-    if(trading == 0){//trading and open positions not allowed
-        close();
-        return 0;
-    }
-
-    if(trading == 2){ //not ok to open position but ok to trail
-        if(openPosition) // just check status of open position and return
-            checkExits();
-    return 0;
-    }
-
-    if(trading == 1){ //ok to open position if no position exists
-        if(openPosition){ //check status of open position and return
-            checkExits();
-            return 0;
-        }
-    }
-
-return 1; //ok to look for open positions if none already open
-}
-
 int checkExits(){
 
-    int newBar = checkNewBar();
-
-    if(newBar == 0) //wait for new bar to check on orders
+    //check orders at the start of a new bar
+    if(!checkNewBar() == 0)
         return 0;
-    
-    int orderClosed = lookForClose(); //return 0 = no close; 1 = position closed; 2 = trail either began or continued
 
-    if(orderClosed == 1){
-        stopLoss = 0.0;
-        takeProfit = 0.0;
-        openPosition = 0;
-    }
+    int orderClosed = lookForClose();
+        //1 == order was closed
+        //0 == order was modified or nothing was changed
+
+    if(orderClosed)
+        resetGlobalVars();
 
 return 0;
 }
@@ -102,65 +74,38 @@ return 0;
 
 int lookForClose(){
 
-    int orders;
-    double ATR = ATRStopLoss(ATRPeriod_1, ATRPeriod_2, trailCoef);
-    datetime closeTime;
     int ticket = getTicket();
-
    
     RefreshRates();
-    orders = OrdersTotal();
     OrderSelect(ticket, SELECT_BY_TICKET);
-    closeTime = OrderCloseTime();
 
-    if(OrderSymbol() == Symbol() && OrderMagicNumber() == Magic && closeTime == 0){
-                if(OrderType() == OP_BUY){
-                    //might want to get rid of SL and calculate a stoploss off the 
-                    //ATR every time you enter the TrailOrder function
-                    if(Bid <= SL){
-                        close();
-                        SL = 0;
-                        trailing = false;
-                        startTrail = 0.0;
-                        return false;
-                    }
-                    if(trailing){
-                        if(Bid >= SL + (ATR))//every ATR is divided by 2 so just go back and divide them
-                            SL = Bid - (ATR);
-                    }
+    if(OrderSymbol() == Symbol() && OrderMagicNumber() == Magic){
 
-                    else    
-                        if(Bid >= startTrail){
-                            SL = Bid - (ATR);//ATR is used to set price but i dont know
-                            trailing = true;   //SL = Bid - (ATR/2)
-                        }
-                }
-                if(OrderType() == OP_SELL)
-                {
+        if(OrderType() == OP_BUY){
+            if(Bid <= stopLoss){
+                close();
+                return 1;
+            }
+            if(Bid >= takeProfit){
+                setNewExits();
+                return 0;
+            }
+        }
 
-                    if(Ask >= SL){
-                        close();
-                        SL = 0;
-                        trailing = false;
-                        startTrail = 0.0;
-                        return false;
-                    }
-                    
-                    if(trailing){
-                        if(Ask <= SL - (ATR))
-                            SL = Ask + (ATR);
-                    }
-
-                    else    
-                        if(Ask <= startTrail){
-                            SL = Ask + (ATR);//ATR is used to set price but i dont know
-                            trailing = true;   // SL = Ask + (ATR/2);
-                        }
-                  return true;
-                }
+        if(OrderType() == OP_SELL){
+            if(Ask >= stopLoss){
+                close();
+                return 1;
+            }
+            
+            if(Ask <= startTrail){
+                setNewExits();
+                return 0;
+            }
+        }
     }
-//printf("returning false");
-return false;
+
+return 0;
 }
 
 bool checkNewBar(){
@@ -177,22 +122,141 @@ bool checkNewBar(){
 //when trade, stop trading or close positions
 int tradeAllowed(){
 
-    int path = 1; //initially path is 1 which means to look for positions to open
- 
-    if(Hour() < startHour || Hour() > endHour) 
-         path = 2; //if trading day is done or hasn't started you can trail open
-                   //orders but cannot open any new orders. 
+    if(positionOpen && closeOrders())
+        return 86;
 
-    if(DayOfWeek() == 5 && Hour() >= endHour)
-        path = 0; //don't hold positions over the weekend. return 0 so main knows 
-                  //to close any open orders 
+    if(positionOpen && !closeOrders())
+        return 2;
 
-    if((DayOfWeek() == 5 && Day() < 8))
-        path = 0; //don't trade release of non-farm payroll report (first friday of month)
-
+    if(!positionOpen && checkTradeSignal())
+        return 1;
+    
     if(Bars < 30)
-        path = 0; //never came across a use case for this case check. but to make sure you
-                  //have enough bars in the que to even do technical analysis
+        path = 0; //never came across a use case for a bar check. but to make sure you
+                  //have enough bars in the queue to even do technical analysis
+return 0;
+}
 
-return path;
+int closeOrders(){
+    //if end of Friday don't hold positions over the weekend. Close.
+    if(DayOfWeek() == 5 && Hour() >= endHour)
+        return 1;
+    //if first Friday of the month don't trade payroll report. Close.
+    if(DayOfWeek() == 5 && Day() < 8)
+        return 1;
+return 0;
+}
+
+int checkTradeSignal(){
+    //only trade in liquid markets. if outside trading window don't look for trade signals.
+    if(Hour() >= startHour && Hour() <= endHour) 
+        return 1;
+    
+    if(closeOrders())
+        return 1;
+return 0;
+}
+
+int getTicket(){
+
+   int ticket = 0;
+   int count = 0;
+   int ordersTotal = OrdersTotal();
+   
+   if(ordersTotal == 0)
+      return ticket;
+    //loop thru all open orders of all securities until the one for the
+    //current chart is found and return it.      
+   for(count; count <= ordersTotal; ++count){
+      OrderSelect(count, SELECT_BY_POS);
+      if(OrderSymbol() == Symbol() && OrderMagicNumber() == Magic){
+         ticket = OrderTicket();
+         count = 666;
+      }
+   }   
+
+return ticket;
+}
+
+bool newBar(){
+    int ticker = iVolume(NULL, 0, 0);
+
+    if(ticker > 1)
+        return 0;
+return 1;
+}
+
+int resetGlobalVars(){
+
+        stopLoss = 0.0;
+        takeProfit = 0.0;
+        newStopLoss = 0.0;
+        newTakeProfit = 0.0;
+        openPosition = 0;
+}
+
+int close(){
+
+    int error = 0;
+    bool closed = false;
+    int attempts = 10;
+    datetime closeTime;
+    double ClosePrice = 0.0;
+    int ticket = getTicket();
+
+    //funny because without checking for whether or not there were any orders
+    //ie. whether a SL/TP had closed an order, my while loop would run 
+    //forever trying to close an order that no longer exists
+    // printf("OrdersTotal() = %i", OrdersTotal());
+    if(OrdersTotal() == 0)
+        return 0;
+        
+        // printf("ticket = %i", ticket);
+        OrderSelect(ticket, SELECT_BY_TICKET);
+        //  printf("ticket() = %i", OrderTicket());
+        closeTime = OrderCloseTime();
+        // printf("closetime: %i", closeTime);
+        if(OrderSymbol() == Symbol() && OrderMagicNumber() == Magic && closeTime == 0){
+    // printf("lots = %f", OrderLots());
+    //  printf("NormalizeDouble(OrderLots(), 2)/2 = %f", NormalizeDouble(OrderLots()/2, 2));
+
+            if(OrderType() == OP_BUY){
+        printf("closing buy at: %f", Bid);
+
+                while(attempts > 0){  
+                    RefreshRates();
+                    ClosePrice=NormalizeDouble(MarketInfo(OrderSymbol(),MODE_BID),Digits);
+                    closed = OrderClose(ticket, OrderLots(), ClosePrice, 2, clrDarkOrange);
+                    --attempts;
+                    error = GetLastError();
+                    if(error)
+                        printf("last error code: %i", error);
+                    if(closed){
+                        ticket = 0;
+                        return 1;
+                    }
+                }
+            }
+
+            if(OrderType() == OP_SELL){
+    printf("closing sell at: %f", Ask);
+
+                while(attempts > 0){
+                    RefreshRates();
+                    ClosePrice=NormalizeDouble(MarketInfo(OrderSymbol(),MODE_ASK),Digits);
+                    closed = OrderClose(ticket, OrderLots(), ClosePrice, 2, clrDarkOrange);
+                    --attempts;
+                    
+                    error = GetLastError();
+                    if(error != 0)
+                        printf("last error code: %i", error);
+                        
+                    if(closed){
+                        ticket = 0;
+                        return 1;
+                    }
+                }
+            }
+        }
+return 1;
 }
