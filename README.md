@@ -7,6 +7,8 @@ implement features to open a position, choose position size and determine an exi
 position. There is also the option to either exit the position at a predetermined price
 or trail the price. So, there should be an algorithm that trails the price.
 
+Just need to find the time to do this in a way that it's as clear as possible.
+
 
 For your consideration, 
 
